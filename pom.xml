@@ -104,6 +104,13 @@
                 <updatePolicy>always</updatePolicy>
             </snapshots>
         </repository>
+        <repository>
+            <id>github</id>
+            <url>https://raw.github.com/protegeproject/mvn-repo/master/releases</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+        </repository>
     </repositories>
 
     <!--
@@ -128,7 +135,7 @@
         <dependency>
             <groupId>edu.stanford.protege</groupId>
             <artifactId>rdf-library</artifactId>
-            <version>3.0.0</version>
+            <version>3.0.1</version>
         </dependency>
 
         <dependency>

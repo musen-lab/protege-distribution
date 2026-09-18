@@ -14,7 +14,7 @@
         The version of Protege that we are targeting.  We set this to our project version.  The two should be in sync.
         Note that we declare the oss-sonatype snapshot repository so that we can work with snapshots.
         -->
-        <protege.version>5.6.9</protege.version>
+        <protege.version>5.6.10-jhu-testing-SNAPSHOT</protege.version>
 
         <!--
         The directory name for a distribution.  This is the directory that a user copies to the location
@@ -96,9 +96,9 @@
 
     <repositories>
         <repository>
-            <id>oss-sonatype</id>
-            <name>oss-sonatype</name>
-            <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
+            <id>central-snapshots</id>
+            <name>central-snapshots</name>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
             <snapshots>
                 <enabled>true</enabled>
                 <updatePolicy>always</updatePolicy>

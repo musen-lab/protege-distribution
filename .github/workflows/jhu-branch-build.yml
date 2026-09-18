@@ -1,0 +1,161 @@
+name: JHU branch build
+
+# Builds runnable Protégé installers from any branch of musen-lab/protege and publishes them
+# as a GitHub pre-release, so partners can try work that has not yet merged.
+#
+# Unlike the JHU testing build, nothing is published to Maven Central. Protégé is checked out
+# and installed into the runner's local repository, and the distribution resolves it from
+# there. A branch build has exactly one consumer — this workflow — so publishing provisional
+# feature-branch artifacts to a permanent public repository would be cost without benefit.
+#
+# This workflow belongs to musen-lab/protege-distribution only and must not be contributed
+# upstream. The repository guard makes it inert elsewhere.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch of musen-lab/protege to build"
+        required: true
+        default: "master"
+      note:
+        description: "Optional note for the release page, e.g. what to test"
+        required: false
+        default: ""
+
+# Scoped by branch, so two branch builds do not cancel each other. A second build of the
+# same branch does supersede the first.
+concurrency:
+  group: jhu-branch-build-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'musen-lab/protege-distribution'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the distribution
+        uses: actions/checkout@v4
+
+      - name: Check out Protégé at the requested branch
+        uses: actions/checkout@v4
+        with:
+          repository: musen-lab/protege
+          ref: ${{ inputs.branch }}
+          path: protege-src
+
+      - name: Set up JDK/Maven
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Derive a version from the branch name
+        id: version
+        run: |
+          # Maven versions cannot contain a slash, and underscores read poorly in a
+          # filename, so both become hyphens. Lowercased for consistency.
+          slug=$(printf '%s' "${{ inputs.branch }}" | tr '/_' '--' | tr '[:upper:]' '[:lower:]')
+          version="5.6.10-jhu-${slug}-SNAPSHOT"
+          echo "slug=$slug"       >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Branch  ${{ inputs.branch }}"
+          echo "Version $version"
+
+      - name: Record what was built
+        id: source
+        working-directory: protege-src
+        run: |
+          echo "sha=$(git rev-parse HEAD)"           >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "subject=$(git log -1 --pretty=%s)"   >> "$GITHUB_OUTPUT"
+
+      - name: Install Protégé into the runner's local repository
+        working-directory: protege-src
+        run: |
+          mvn --batch-mode versions:set \
+            --define newVersion=${{ steps.version.outputs.version }} \
+            --define generateBackupPoms=false
+          mvn --batch-mode --define maven.test.skip=true \
+            --define release.signing.disabled=true install
+
+      - name: Build the installers
+        run: >
+          mvn --batch-mode clean package
+          --define protege.version=${{ steps.version.outputs.version }}
+
+      - name: Name the release
+        id: name
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M)
+          echo "tag=jhu-branch-${{ steps.version.outputs.slug }}-$stamp" >> "$GITHUB_OUTPUT"
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+
+      - name: List what was built
+        run: ls -lh target/*.zip target/*.tar.gz
+
+      - name: Publish as a pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.tag }}
+          name: "Branch build: ${{ inputs.branch }} (${{ steps.name.outputs.stamp }})"
+          prerelease: true
+          body: |
+            Protégé build from the **`${{ inputs.branch }}`** branch, for our JHU project
+            partners to try work that has not yet merged.
+
+            **This is not a supported Protégé release**, and the code in it has not merged to
+            `master`. Behaviour may change or be withdrawn.
+
+            ${{ inputs.note }}
+
+            | | |
+            | --- | --- |
+            | Branch | `${{ inputs.branch }}` |
+            | Commit | [`${{ steps.source.outputs.short }}`](https://github.com/musen-lab/protege/commit/${{ steps.source.outputs.sha }}) |
+            | Latest change | ${{ steps.source.outputs.subject }} |
+
+            | Platform | File |
+            | --- | --- |
+            | macOS | `Protege-${{ steps.version.outputs.version }}-mac.zip` |
+            | Windows | `Protege-${{ steps.version.outputs.version }}-win.zip` |
+            | Linux | `Protege-${{ steps.version.outputs.version }}-linux.tar.gz` |
+            | Any (needs a Java runtime) | `Protege-${{ steps.version.outputs.version }}-platform-independent.zip` |
+
+            The macOS, Windows and Linux archives each bundle a Java runtime, so no separate
+            Java installation is needed.
+
+            **macOS note:** these builds are unsigned and not notarized, so Gatekeeper will
+            refuse to open the application on first launch. Right-click the app and choose
+            Open, or clear the quarantine attribute with
+            `xattr -dr com.apple.quarantine /path/to/Protégé.app`.
+          files: |
+            target/*.zip
+            target/*.tar.gz
+
+      - name: Keep only the two newest builds of this branch
+        # Branch builds are more provisional than master builds, so fewer are kept. Only tags
+        # for this same branch are considered, so other branches and real releases are never
+        # touched.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          keep=2
+          prefix="jhu-branch-${{ steps.version.outputs.slug }}-"
+          mapfile -t stale < <(
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+              --json tagName,createdAt,isPrerelease \
+              --jq 'map(select(.isPrerelease and (.tagName | startswith("'"$prefix"'"))))
+                    | sort_by(.createdAt) | reverse | .['"$keep"':] | .[].tagName'
+          )
+          if [ ${#stale[@]} -eq 0 ]; then
+            echo "Nothing to prune for $prefix"
+            exit 0
+          fi
+          for tag in "${stale[@]}"; do
+            echo "Deleting $tag and its assets"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          done

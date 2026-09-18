@@ -1,0 +1,93 @@
+name: JHU testing build
+
+# Builds runnable Protégé installers from the JHU testing artifacts and publishes them as a
+# GitHub pre-release, so our project partners can download and run them.
+#
+# This workflow belongs to musen-lab/protege-distribution only and must not be contributed
+# upstream to protegeproject/protege-distribution. The repository guard below makes it inert
+# anywhere else, but the guard is a safety net rather than the mechanism: keep the file on
+# the fork.
+#
+# The platform artifacts it consumes are published separately, by the JHU testing release
+# workflow in musen-lab/protege. Run that first if the platform code has changed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      protege_version:
+        description: "Protégé version to build from"
+        required: true
+        default: "5.6.10-jhu-testing-SNAPSHOT"
+
+# One build at a time. These assemblies are large and a superseded build has no value.
+concurrency:
+  group: jhu-testing-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'musen-lab/protege-distribution'
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the pre-release and attach assets.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK/Maven
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Build the installers
+        # -U so a changed snapshot is re-fetched rather than taken from the runner cache.
+        run: >
+          mvn --batch-mode --update-snapshots clean package
+          --define protege.version=${{ inputs.protege_version }}
+
+      - name: Name the release
+        id: name
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M)
+          echo "tag=jhu-testing-$stamp" >> "$GITHUB_OUTPUT"
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+
+      - name: List what was built
+        run: ls -lh target/*.zip target/*.tar.gz
+
+      - name: Publish as a pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.tag }}
+          name: "JHU testing build ${{ steps.name.outputs.stamp }}"
+          # Marked as a pre-release so it is never mistaken for a supported Protégé release
+          # and does not become the repository's "latest".
+          prerelease: true
+          body: |
+            Protégé testing build for our JHU project partners.
+
+            **This is not a supported Protégé release.** It is built from
+            `${{ inputs.protege_version }}` for testing, and the code in it has not been
+            through the release process.
+
+            Built from `musen-lab/protege-distribution@${{ github.sha }}`.
+
+            | Platform | File |
+            | --- | --- |
+            | macOS | `Protege-${{ inputs.protege_version }}-mac.zip` |
+            | Windows | `Protege-${{ inputs.protege_version }}-win.zip` |
+            | Linux | `Protege-${{ inputs.protege_version }}-linux.tar.gz` |
+            | Any (needs a Java runtime) | `Protege-${{ inputs.protege_version }}-platform-independent.zip` |
+
+            The macOS, Windows and Linux archives each bundle a Java runtime, so no separate
+            Java installation is needed.
+
+            **macOS note:** these builds are unsigned and not notarized, so Gatekeeper will
+            refuse to open the application on first launch. Right-click the app and choose
+            Open, or clear the quarantine attribute with
+            `xattr -dr com.apple.quarantine /path/to/Protégé.app`.
+          files: |
+            target/*.zip
+            target/*.tar.gz

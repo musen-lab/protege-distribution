@@ -46,6 +46,9 @@ jobs:
           repository: musen-lab/protege
           ref: ${{ inputs.branch }}
           path: protege-src
+          # Needed for the change summary below: the default shallow clone fetches one
+          # commit, and if that commit is a merge then --no-merges leaves nothing to list.
+          fetch-depth: 50
 
       - name: Set up JDK/Maven
         uses: actions/setup-java@v4

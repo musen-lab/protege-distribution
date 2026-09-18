@@ -94,33 +94,44 @@ jobs:
           echo "tag=jhu-branch-${{ steps.version.outputs.slug }}-$stamp" >> "$GITHUB_OUTPUT"
           echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
 
-      - name: Generate the list of changes
+      - name: Summarise the changes on this branch
         id: changes
-        # GitHub generates this from the pull requests merged into the branch: title, author
-        # and a link for each. previous_tag_name is deliberately omitted — the Protégé fork
-        # carries no tags, and for a branch build the useful content is everything in the
-        # branch rather than the difference from some earlier point.
-        env:
-          GH_TOKEN: ${{ github.token }}
+        working-directory: protege-src
+        # Built from git rather than from GitHub's release-notes API. That API lives in the
+        # musen-lab/protege repository, and github.token is scoped to this one, so a
+        # cross-repository call is refused and would need a long-lived personal token.
+        # The commits here are conventional-commit formatted, so their subjects carry the
+        # meaning without one.
         run: |
-          notes=$(
-            gh api repos/musen-lab/protege/releases/generate-notes \
-              --method POST \
-              --field tag_name=${{ steps.name.outputs.tag }} \
-              --field target_commitish=${{ inputs.branch }} \
-              --jq .body 2>/dev/null
-          ) || notes=""
-          if [ -z "$notes" ]; then
-            echo "Could not generate a change list; the release will omit that section."
-            notes="_No change list could be generated for this branch._"
-          fi
-          # Multi-line output needs a delimiter.
+          python3 - <<'PYEOF' > /tmp/changes.md
+          import subprocess, re, collections
+          log = subprocess.run(
+              ["git", "log", "--no-merges", "--pretty=%s", "-40"],
+              capture_output=True, text=True).stdout
+          shown = collections.OrderedDict([("feat", "New"), ("fix", "Fixed"), ("perf", "Performance")])
+          quiet = ("refactor", "test", "docs", "chore", "style", "build", "ci")
+          buckets = collections.defaultdict(list)
+          for line in log.splitlines():
+              m = re.match(r"^(\w+)(\([^)]*\))?!?:\s*(.+)$", line.strip())
+              if m:
+                  buckets[m.group(1)].append(m.group(3))
+          out = []
+          for key, label in shown.items():
+              if buckets[key]:
+                  out.append(f"**{label}**")
+                  out += [f"- {item}" for item in buckets[key]]
+                  out.append("")
+          internal = sum(len(buckets[k]) for k in quiet)
+          if internal:
+              out.append(f"_Plus {internal} internal changes (refactoring, tests, documentation)._")
+          print("\n".join(out) if out else "_No categorised changes found on this branch._")
+          PYEOF
           {
             echo "notes<<CHANGES_EOF"
-            echo "$notes"
+            cat /tmp/changes.md
             echo "CHANGES_EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "$notes"
+          cat /tmp/changes.md
 
       - name: List what was built
         run: ls -lh target/*.zip target/*.tar.gz

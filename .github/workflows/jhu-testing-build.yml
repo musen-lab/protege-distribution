@@ -91,3 +91,27 @@ jobs:
           files: |
             target/*.zip
             target/*.tar.gz
+
+      - name: Keep only the five newest testing pre-releases
+        # Each build attaches roughly 360 MB of permanent assets under a new tag. Without
+        # pruning, the releases page becomes an archive in which partners cannot tell which
+        # build matters. Only tags matching jhu-testing-* are considered, so a real release
+        # in this repository is never touched.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          keep=5
+          mapfile -t stale < <(
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+              --json tagName,createdAt,isPrerelease \
+              --jq 'map(select(.isPrerelease and (.tagName | startswith("jhu-testing-"))))
+                    | sort_by(.createdAt) | reverse | .['"$keep"':] | .[].tagName'
+          )
+          if [ ${#stale[@]} -eq 0 ]; then
+            echo "Nothing to prune; $keep or fewer testing pre-releases exist."
+            exit 0
+          fi
+          for tag in "${stale[@]}"; do
+            echo "Deleting $tag and its assets"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          done
